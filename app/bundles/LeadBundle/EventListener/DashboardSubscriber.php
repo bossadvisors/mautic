@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -166,8 +167,9 @@ class DashboardSubscriber extends MainDashboardSubscriber
                 // Build table rows with links
                 if ($lists) {
                     foreach ($lists as &$list) {
-                        $listUrl = $this->router->generate('mautic_segment_action', ['objectAction' => 'edit', 'objectId' => $list['id']]);
-                        $row     = [
+                        $listUrl    = $this->router->generate('mautic_segment_action', ['objectAction' => 'edit', 'objectId' => $list['id']]);
+                        $contactUrl = $this->router->generate('mautic_contact_index', ['search' => 'segment:'.$list['alias']]);
+                        $row        = [
                             [
                                 'value' => $list['name'],
                                 'type'  => 'link',
@@ -175,6 +177,8 @@ class DashboardSubscriber extends MainDashboardSubscriber
                             ],
                             [
                                 'value' => $list['leads'],
+                                'type'  => 'link',
+                                'link'  => $contactUrl,
                             ],
                         ];
                         $items[] = $row;
@@ -217,6 +221,15 @@ class DashboardSubscriber extends MainDashboardSubscriber
 
             $lists = $this->leadListModel->getLifeCycleSegments($maxSegmentsToshow, $params['dateFrom'], $params['dateTo'], $canViewOthers, $params['filter']['flag']);
             $items = [];
+
+            if (empty($lists)) {
+                $lists[] = [
+                    'leads' => 0,
+                    'id'    => 0,
+                    'name'  => $event->getTranslator()->trans('mautic.lead.all.leads'),
+                    'alias' => '',
+                ];
+            }
 
             // Build table rows with links
             if ($lists) {
@@ -410,14 +423,21 @@ class DashboardSubscriber extends MainDashboardSubscriber
                 $leads = $this->leadModel->getLeadList($limit, $params['dateFrom'], $params['dateTo'], $canViewOthers, [], ['canViewOthers' => $canViewOthers]);
                 $items = [];
 
+                if (empty($leads)) {
+                    $leads[] = [
+                        'name' => $this->translator->trans('mautic.report.report.noresults'),
+                    ];
+                }
+
                 // Build table rows with links
                 if ($leads) {
                     foreach ($leads as &$lead) {
-                        $leadUrl = $this->router->generate('mautic_contact_action', ['objectAction' => 'view', 'objectId' => $lead['id']]);
+                        $leadUrl = isset($lead['id']) ? $this->router->generate('mautic_contact_action', ['objectAction' => 'view', 'objectId' => $lead['id']]) : '';
+                        $type    = isset($lead['id']) ? 'link' : 'text';
                         $row     = [
                             [
                                 'value' => $lead['name'],
-                                'type'  => 'link',
+                                'type'  => $type,
                                 'link'  => $leadUrl,
                             ],
                         ];

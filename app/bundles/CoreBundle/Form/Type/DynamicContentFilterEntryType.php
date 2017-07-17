@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -67,7 +68,7 @@ class DynamicContentFilterEntryType extends AbstractType
             [
                 'label' => 'mautic.core.dynamicContent.alt_content',
                 'attr'  => [
-                    'class' => 'form-control editor editor-basic',
+                    'class' => 'form-control editor editor-dynamic-content',
                 ],
             ]
         );
@@ -88,6 +89,7 @@ class DynamicContentFilterEntryType extends AbstractType
                         'timezones' => $this->timezoneChoices,
                         'stages'    => $this->stageChoices,
                         'locales'   => $this->localeChoices,
+                        'fields'    => $this->fieldChoices,
                     ],
                     'error_bubbling' => false,
                     'mapped'         => true,
@@ -131,7 +133,7 @@ class DynamicContentFilterEntryType extends AbstractType
     private function filterFieldChoices()
     {
         $this->fieldChoices['lead'] = array_filter($this->fieldChoices['lead'], function ($key) {
-            return !in_array($key, ['company', 'leadlist', 'lead_email_received', 'tags', 'dnc_bounced', 'dnc_unsubscribed', 'dnc_bounced_sms', 'dnc_unsubscribed_sms', 'hit_url']);
+            return !in_array($key, ['company', 'leadlist', 'device_type', 'device_brand', 'device_os', 'lead_email_received', 'tags', 'dnc_bounced', 'dnc_unsubscribed', 'dnc_bounced_sms', 'dnc_unsubscribed_sms', 'hit_url']);
         }, ARRAY_FILTER_USE_KEY);
     }
 }

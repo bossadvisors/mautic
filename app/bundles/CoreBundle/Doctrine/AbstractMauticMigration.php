@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -189,5 +190,15 @@ abstract class AbstractMauticMigration extends AbstractMigration implements Cont
         );
 
         return substr(strtoupper($type.'_'.$hash), 0, 63);
+    }
+
+    /**
+     * Use this when you're doing a migration that
+     * purposely does not have any SQL statements,
+     * such as when moving data using the query builder.
+     */
+    protected function suppressNoSQLStatementError()
+    {
+        $this->addSql('SELECT "This migration did not generate select statements." AS purpose');
     }
 }

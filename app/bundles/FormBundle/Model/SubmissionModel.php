@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -214,6 +215,12 @@ class SubmissionModel extends CommonFormModel
             }
 
             if ($f->isRequired() && empty($value)) {
+
+                //field is required, but hidden from form because of 'ShowWhenValueExists'
+                if ($f->getShowWhenValueExists() === false && !isset($post[$alias])) {
+                    continue;
+                }
+
                 //somehow the user got passed the JS validation
                 $msg = $f->getValidationMessage();
                 if (empty($msg)) {
@@ -231,7 +238,7 @@ class SubmissionModel extends CommonFormModel
                 continue;
             }
 
-            if (in_array($type, $components['viewOnlyFields'])) {
+            if (isset($components['viewOnlyFields']) && in_array($type, $components['viewOnlyFields'])) {
                 //don't save items that don't have a value associated with it
                 continue;
             }
@@ -283,11 +290,6 @@ class SubmissionModel extends CommonFormModel
             $leadField = $f->getLeadField();
             if (!empty($leadField)) {
                 $leadValue = $value;
-                if (is_array($leadValue)) {
-                    // Multiselect lead fields store the values with bars
-                    $delimeter = ('multiselect' === $leadFields[$leadField]['type']) ? '|' : ', ';
-                    $leadValue = implode($delimeter, $leadValue);
-                }
 
                 $leadFieldMatches[$leadField] = $leadValue;
             }
@@ -317,11 +319,6 @@ class SubmissionModel extends CommonFormModel
         // @deprecated - BC support; to be removed in 3.0 - be sure to remove the validator option from addSubmitAction as well
         $this->validateActionCallbacks($submissionEvent, $validationErrors, $alias);
 
-        //return errors if there any - this should be moved to right after foreach($fields) once validateActionCallbacks support is dropped
-        if (!empty($validationErrors)) {
-            return ['errors' => $validationErrors];
-        }
-
         // Create/update lead
         if (!empty($leadFieldMatches)) {
             $lead = $this->createLeadFromSubmit($form, $leadFieldMatches, $leadFields);
@@ -338,6 +335,22 @@ class SubmissionModel extends CommonFormModel
             $submission->setTrackingId($trackingId);
         }
         $submission->setLead($lead);
+
+        // Remove validation errors if the field is not visible
+        if ($form->usesProgressiveProfiling()) {
+            $leadSubmissions = $this->formModel->getLeadSubmissions($form, $lead->getId());
+
+            foreach ($fields as $field) {
+                if (isset($validationErrors[$field->getAlias()]) && !$field->showForContact($leadSubmissions, $lead, $form)) {
+                    unset($validationErrors[$field->getAlias()]);
+                }
+            }
+        }
+
+        //return errors if there any
+        if (!empty($validationErrors)) {
+            return ['errors' => $validationErrors];
+        }
 
         // Save the submission
         $this->saveEntity($submission);
@@ -441,7 +454,7 @@ class SubmissionModel extends CommonFormModel
                         foreach ($results as $k => $s) {
                             $row = [
                                 $s['id'],
-                                $s['dateSubmitted']->format('Y-m-d H:m:s'),
+                                $s['dateSubmitted']->format('Y-m-d H:i:s'),
                                 $s['ipAddress']['ipAddress'],
                                 $s['referer'],
                             ];
@@ -449,7 +462,7 @@ class SubmissionModel extends CommonFormModel
                                 if (in_array($r['type'], $viewOnlyFields)) {
                                     continue;
                                 }
-                                $row[] = $r['value'];
+                                $row[] = htmlspecialchars_decode($r['value'], ENT_QUOTES);
                                 //free memory
                                 unset($s['results'][$k2]);
                             }
@@ -518,7 +531,7 @@ class SubmissionModel extends CommonFormModel
                             foreach ($results as $k => $s) {
                                 $row = [
                                     $s['id'],
-                                    $s['dateSubmitted']->format('Y-m-d H:m:s'),
+                                    $s['dateSubmitted']->format('Y-m-d H:i:s'),
                                     $s['ipAddress']['ipAddress'],
                                     $s['referer'],
                                 ];
@@ -526,7 +539,7 @@ class SubmissionModel extends CommonFormModel
                                     if (in_array($r['type'], $viewOnlyFields)) {
                                         continue;
                                     }
-                                    $row[] = $r['value'];
+                                    $row[] = htmlspecialchars_decode($r['value'], ENT_QUOTES);
                                     //free memory
                                     unset($s['results'][$k2]);
                                 }
@@ -764,7 +777,7 @@ class SubmissionModel extends CommonFormModel
             // Default to currently tracked lead
             $lead          = $this->leadModel->getCurrentLead();
             $leadId        = $lead->getId();
-            $currentFields = $this->leadModel->flattenFields($lead->getFields());
+            $currentFields = $lead->getProfileFields();
 
             $this->logger->debug('FORM: Not in kiosk mode so using current contact ID #'.$lead->getId());
         } else {
@@ -784,8 +797,6 @@ class SubmissionModel extends CommonFormModel
         $getData = function ($currentFields, $uniqueOnly = false) use ($leadFields, $uniqueLeadFields) {
             $uniqueFieldsWithData = $data = [];
             foreach ($leadFields as $alias => $properties) {
-                $data[$alias] = '';
-
                 if (isset($currentFields[$alias])) {
                     $value        = $currentFields[$alias];
                     $data[$alias] = $value;
@@ -913,7 +924,7 @@ class SubmissionModel extends CommonFormModel
         }
 
         //set the mapped fields
-        $this->leadModel->setFieldValues($lead, $data, false);
+        $this->leadModel->setFieldValues($lead, $data, false, true, true);
 
         if (!empty($event)) {
             $event->setIpAddress($ipAddress);
@@ -955,7 +966,13 @@ class SubmissionModel extends CommonFormModel
         $components = $this->formModel->getCustomComponents();
         foreach ([$field->getType(), 'form'] as $type) {
             if (isset($components['validators'][$type])) {
+                if (!is_array($components['validators'][$type])) {
+                    $components['validators'][$type] = [$components['validators'][$type]];
+                }
                 foreach ($components['validators'][$type] as $validator) {
+                    if (!is_array($validator)) {
+                        $validator = ['eventName' => $validator];
+                    }
                     $event = $this->dispatcher->dispatch($validator['eventName'], new ValidationEvent($field, $value));
                     if (!$event->isValid()) {
                         return $event->getInvalidReason();

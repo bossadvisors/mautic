@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -22,6 +23,7 @@ use Symfony\Component\OptionsResolver\OptionsResolverInterface;
  */
 class CampaignType extends AbstractType
 {
+    private $security;
     private $translator;
     private $em;
 

@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -137,7 +138,6 @@ if (empty($preview)):
                             $f->setProperties($properties);
                         }
                     }
-
                     echo $view->render($template, ['field' => $f->convertToArray(), 'id' => $f->getAlias()]);
                 endforeach;
 

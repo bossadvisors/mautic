@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -162,7 +163,8 @@ class Hit
             ->addIndex(['tracking_id'], 'page_hit_tracking_search')
             ->addIndex(['code'], 'page_hit_code_search')
             ->addIndex(['source', 'source_id'], 'page_hit_source_search')
-            ->addIndex(['date_hit'], 'page_date_hit');
+            ->addIndex(['date_hit'], 'page_date_hit')
+            ->addIndex(['date_hit', 'date_left'], 'date_hit_left_index');
 
         $builder->addId();
 
@@ -277,6 +279,7 @@ class Hit
         $metadata->setGroupPrefix('hit')
             ->addProperties(
                 [
+                    'id',
                     'dateHit',
                     'dateLeft',
                     'page',

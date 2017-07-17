@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2015 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -49,12 +50,17 @@ class TokenSubscriber extends CommonSubscriber
             $event->setPlainText($plainText);
         }
 
-        $lead                  = $event->getLead();
-        $email                 = $event->getEmail();
-        $dynamicContentAsArray = $email instanceof Email ? $email->getDynamicContent() : null;
-
-        if (!empty($dynamicContentAsArray)) {
-            $tokenEvent = new TokenReplacementEvent(null, $lead, ['lead' => null, 'dynamicContent' => $dynamicContentAsArray]);
+        $email = $event->getEmail();
+        if ($dynamicContentAsArray = $email instanceof Email ? $email->getDynamicContent() : null) {
+            $lead       = $event->getLead();
+            $tokens     = $event->getTokens();
+            $tokenEvent = new TokenReplacementEvent(
+                null, $lead, [
+                    'tokens'         => $tokens,
+                    'lead'           => null,
+                    'dynamicContent' => $dynamicContentAsArray,
+                ]
+            );
             $this->dispatcher->dispatch(EmailEvents::TOKEN_REPLACEMENT, $tokenEvent);
             $event->addTokens($tokenEvent->getTokens());
         }
@@ -72,6 +78,7 @@ class TokenSubscriber extends CommonSubscriber
         }
 
         $lead      = $event->getLead();
+        $tokens    = $clickthrough['tokens'];
         $tokenData = $clickthrough['dynamicContent'];
 
         if ($lead instanceof Lead) {
@@ -79,8 +86,8 @@ class TokenSubscriber extends CommonSubscriber
         }
 
         foreach ($tokenData as $data) {
-            $defaultContent = $data['content'];
-            $filterContent  = null;
+            // Default content
+            $filterContent = $data['content'];
 
             foreach ($data['filters'] as $filter) {
                 if ($this->matchFilterForLead($filter['filters'], $lead)) {
@@ -88,7 +95,21 @@ class TokenSubscriber extends CommonSubscriber
                 }
             }
 
-            $event->addToken('{dynamiccontent="'.$data['tokenName'].'"}', $filterContent ?: $defaultContent);
+            // Replace lead tokens in dynamic content (but no recurrence on dynamic content to avoid infinite loop)
+            $emailSendEvent = new EmailSendEvent(
+                null,
+                [
+                    'content' => $filterContent,
+                    'email'   => null,
+                    'idHash'  => null,
+                    'tokens'  => $tokens,
+                    'lead'    => $lead,
+                ]
+            );
+            $this->dispatcher->dispatch(EmailEvents::EMAIL_ON_DISPLAY, $emailSendEvent);
+            $untokenizedContent = $emailSendEvent->getContent(true);
+
+            $event->addToken('{dynamiccontent="'.$data['tokenName'].'"}', $untokenizedContent);
         }
     }
 
@@ -130,24 +151,73 @@ class TokenSubscriber extends CommonSubscriber
                 continue;
             }
 
-            $leadVal   = $isCompanyField ? $primaryCompany[$data['field']] : $lead[$data['field']];
-            $filterVal = $data['filter'];
-
-            if (!is_array($filterVal) && in_array($data['type'], ['number', 'boolean'])) {
-                $filterVal = $data['type'] === 'number' ? (float) $filterVal : (bool) $filterVal;
+            /*
+             * If we are checking the first filter in a group
+             * assume that the group will not match.
+             */
+            if ($groups[$groupNum] === null) {
+                $groups[$groupNum] = false;
             }
 
-            if (in_array($data['operator'], ['like', '!like'])) {
-                $leadVal   = (string) $leadVal;
-                $filterVal = (string) $filterVal;
+            $leadVal   = ($isCompanyField ? $primaryCompany[$data['field']] : $lead[$data['field']]);
+            $filterVal = $data['filter'];
+
+            switch ($data['type']) {
+                case 'boolean':
+                    if ($leadVal !== null) {
+                        $leadVal = (bool) $leadVal;
+                    }
+
+                    if ($filterVal !== null) {
+                        $filterVal = (bool) $filterVal;
+                    }
+                    break;
+                case 'date':
+                    if (!$leadVal instanceof \DateTime) {
+                        $leadVal = new \DateTime($leadVal);
+                    }
+
+                    if (!$filterVal instanceof \DateTime) {
+                        $filterVal = new \DateTime($filterVal);
+                    }
+                    break;
+                case 'datetime':
+                case 'time':
+                    $leadValCount   = substr_count($leadVal, ':');
+                    $filterValCount = substr_count($filterVal, ':');
+
+                    if ($leadValCount === 2 && $filterValCount === 1) {
+                        $filterVal .= ':00';
+                    }
+                    break;
+                case 'multiselect':
+                    if (!is_array($leadVal)) {
+                        $leadVal = explode('|', $leadVal);
+                    }
+
+                    if (!is_array($filterVal)) {
+                        $filterVal = explode('|', $filterVal);
+                    }
+                    break;
+                case 'number':
+                    $leadVal   = (int) $leadVal;
+                    $filterVal = (int) $filterVal;
+                    break;
+                case 'select':
+                default:
+                    if (is_numeric($leadVal)) {
+                        $leadVal   = (int) $leadVal;
+                        $filterVal = (int) $filterVal;
+                    }
+                    break;
             }
 
             switch ($data['operator']) {
                 case '=':
-                    $groups[$groupNum] = $leadVal === $filterVal;
+                    $groups[$groupNum] = $leadVal == $filterVal;
                     break;
                 case '!=':
-                    $groups[$groupNum] = $leadVal !== $filterVal;
+                    $groups[$groupNum] = $leadVal != $filterVal;
                     break;
                 case 'gt':
                     $groups[$groupNum] = $leadVal > $filterVal;
@@ -172,6 +242,34 @@ class TokenSubscriber extends CommonSubscriber
                     break;
                 case '!like':
                     $groups[$groupNum] = strpos($leadVal, $filterVal) === false;
+                    break;
+                case 'in':
+                    foreach ($leadVal as $k => $v) {
+                        if (in_array($v, $filterVal)) {
+                            $groups[$groupNum] = true;
+                            // Break once we find a match
+                            break;
+                        }
+                    }
+                    break;
+                case '!in':
+                    $leadValNotMatched = true;
+
+                    foreach ($leadVal as $k => $v) {
+                        if (in_array($v, $filterVal)) {
+                            $leadValNotMatched = false;
+                            // Break once we find a match
+                            break;
+                        }
+                    }
+
+                    $groups[$groupNum] = $leadValNotMatched;
+                    break;
+                case 'regexp':
+                    $groups[$groupNum] = preg_match('/'.$filterVal.'/i', $leadVal) === 1;
+                    break;
+                case '!regexp':
+                    $groups[$groupNum] = preg_match('/'.$filterVal.'/i', $leadVal) !== 1;
                     break;
             }
         }

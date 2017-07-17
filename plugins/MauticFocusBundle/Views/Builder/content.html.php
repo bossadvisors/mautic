@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2016 Mautic, Inc. All rights reserved
  * @author      Mautic, Inc
  *
@@ -43,6 +44,7 @@ $props = $focus['properties'];
             echo $view->render('MauticFocusBundle:Builder:style.less.php',
                 [
                     'preview' => true,
+                    'focus'   => $focus,
                 ]
             );
         endif;

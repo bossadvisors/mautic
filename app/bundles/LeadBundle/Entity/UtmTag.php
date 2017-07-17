@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -99,7 +100,7 @@ class UtmTag
 
         $builder->addNullableField('query', 'array');
 
-        $builder->addNullableField('referer', 'string');
+        $builder->addNullableField('referer', 'text');
 
         $builder->addNullableField('remoteHost', 'string', 'remote_host');
 
@@ -125,7 +126,7 @@ class UtmTag
      */
     public static function loadApiMetadata(ApiMetadataDriver $metadata)
     {
-        $metadata->setGroupPrefix('tmutmtag')
+        $metadata->setGroupPrefix('utmtags')
             ->addListProperties(
                 [
                     'id',
@@ -348,7 +349,7 @@ class UtmTag
      *
      * @return Hit
      */
-    public function setUtmConent($utmContent)
+    public function setUtmContent($utmContent)
     {
         $this->utmContent = $utmContent;
 
@@ -413,5 +414,26 @@ class UtmTag
         $this->utmTerm = $utmTerm;
 
         return $this;
+    }
+
+    /**
+     * @return array
+     */
+    public function getFieldSetterList()
+    {
+        // available fields and it's setter.
+        return [
+            'utm_campaign' => 'setUtmCampaign',
+            'utm_source'   => 'setUtmSource',
+            'utm_medium'   => 'setUtmMedium',
+            'utm_content'  => 'setUtmContent',
+            'utm_term'     => 'setUtmTerm',
+            'user_agent'   => 'setUserAgent',
+            'url'          => 'setUrl',
+            'referer'      => 'setReferer',
+            'query'        => 'setQuery',
+            'remote_host'  => 'setRemoteHost',
+            'date_added'   => 'setDateAdded',
+        ];
     }
 }

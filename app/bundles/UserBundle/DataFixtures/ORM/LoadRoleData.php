@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -58,7 +59,7 @@ class LoadRoleData extends AbstractFixture implements OrderedFixtureInterface, C
             'user:profile' => ['editname'],
             'lead:leads'   => ['full'],
         ];
-        $this->container->get('mautic.factory')->getModel('user.role')->setRolePermissions($role, $permissions);
+        $this->container->get('mautic.user.model.role')->setRolePermissions($role, $permissions);
 
         $manager->persist($role);
         $manager->flush();

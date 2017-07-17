@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -13,6 +14,8 @@ namespace Mautic\LeadBundle\Entity;
 use Doctrine\DBAL\Query\QueryBuilder;
 use Mautic\CoreBundle\Entity\CommonRepository;
 use Mautic\CoreBundle\Helper\DateTimeHelper;
+use Mautic\CoreBundle\Helper\InputHelper;
+use Mautic\CoreBundle\Helper\SearchStringHelper;
 use Mautic\PointBundle\Model\TriggerModel;
 
 /**
@@ -21,6 +24,8 @@ use Mautic\PointBundle\Model\TriggerModel;
 class LeadRepository extends CommonRepository implements CustomFieldRepositoryInterface
 {
     use CustomFieldRepositoryTrait;
+    use ExpressionHelperTrait;
+    use OperatorListTrait;
 
     /**
      * @var array
@@ -78,49 +83,54 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
      *
      * @return array
      */
-    public function getLeadsByFieldValue($field, $value, $ignoreId = null)
+    public function getLeadsByFieldValue($field, $value, $ignoreId = null, $indexByColumn = false)
     {
         $col = 'l.'.$field;
+
+        $q = $this->getEntityManager()->getConnection()->createQueryBuilder()
+            ->select('l.id')
+            ->from(MAUTIC_TABLE_PREFIX.'leads', 'l');
 
         if ($field == 'email') {
             // Prevent emails from being case sensitive
             $col   = "LOWER($col)";
-            $value = strtolower($value);
+            $value = (is_array($value)) ? array_map(
+                function ($v) use ($q) {
+                    return $q->expr()->literal(strtolower(InputHelper::email($v)));
+                },
+                $value
+            ) : strtolower($value);
         }
 
-        $q = $this->_em->getConnection()->createQueryBuilder()
-            ->select('l.id')
-            ->from(MAUTIC_TABLE_PREFIX.'leads', 'l')
-            ->where("$col = :search")
-            ->setParameter('search', $value);
+        if (is_array($value)) {
+            $q->where(
+                $q->expr()->in($col, $value)
+            );
+        } else {
+            $q->where("$col = :search")
+                ->setParameter('search', $value);
+        }
 
         if ($ignoreId) {
             $q->andWhere('l.id != :ignoreId')
                 ->setParameter('ignoreId', $ignoreId);
         }
 
-        $results = $q->execute()->fetchAll();
+        $results = $this->getEntities(['qb' => $q, 'ignore_paginator' => true]);
 
-        if (count($results)) {
-            $ids = [];
-            foreach ($results as $r) {
-                $ids[] = $r['id'];
-            }
-
-            $q = $this->_em->createQueryBuilder()
-                ->select('l')
-                ->from('MauticLeadBundle:Lead', 'l');
-            $q->where(
-                $q->expr()->in('l.id', ':ids')
-            )
-                ->setParameter('ids', $ids)
-                ->orderBy('l.dateAdded', 'DESC');
-            $results = $q->getQuery()->getResult();
-
+        if (count($results) && $indexByColumn) {
             /** @var Lead $lead */
+            $leads = [];
             foreach ($results as $lead) {
-                $lead->setAvailableSocialFields($this->availableSocialFields);
+                $fieldKey = $lead->getFieldValue($field);
+                if ('email' === $field) {
+                    $fieldKey = strtolower($fieldKey);
+                }
+
+                $leads[$fieldKey] = $lead;
             }
+
+            return $leads;
         }
 
         return $results;
@@ -129,55 +139,67 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
     /**
      * Get a list of lead entities.
      *
-     * @param      $uniqueFieldsWithData
-     * @param null $leadId
+     * @param     $uniqueFieldsWithData
+     * @param int $leadId
+     * @param int $limit
      *
      * @return array
      */
-    public function getLeadsByUniqueFields($uniqueFieldsWithData, $leadId = null)
+    public function getLeadsByUniqueFields($uniqueFieldsWithData, $leadId = null, $limit = null)
     {
-        // get the list of IDs
-        $idList = $this->getLeadIdsByUniqueFields($uniqueFieldsWithData, $leadId);
+        $q = $this->getEntityManager()->getConnection()->createQueryBuilder()
+            ->select('l.*')
+            ->from(MAUTIC_TABLE_PREFIX.'leads', 'l');
 
-        // init to empty array
-        $results = [];
-
-        // if we didn't get anything return empty
-        if (!count(($idList))) {
-            return $results;
+        // loop through the fields and
+        foreach ($uniqueFieldsWithData as $col => $val) {
+            $q->orWhere("l.$col = :".$col)
+                ->setParameter($col, $val);
         }
 
-        $ids = [];
-
-        // we know we have at least one
-        foreach ($idList as $r) {
-            $ids[] = $r['id'];
+        // if we have a lead ID lets use it
+        if (!empty($leadId)) {
+            // make sure that its not the id we already have
+            $q->andWhere('l.id != '.$leadId);
         }
 
-        $q = $this->_em->createQueryBuilder()
+        if ($limit) {
+            $q->setMaxResults($limit);
+        }
+
+        $results = $q->execute()->fetchAll();
+
+        // Collect the IDs
+        $leads = [];
+        foreach ($results as $r) {
+            $leads[$r['id']] = $r;
+        }
+
+        // Get entities
+        $q = $this->getEntityManager()->createQueryBuilder()
             ->select('l')
             ->from('MauticLeadBundle:Lead', 'l');
 
         $q->where(
             $q->expr()->in('l.id', ':ids')
         )
-            ->setParameter('ids', $ids)
+            ->setParameter('ids', array_keys($leads))
             ->orderBy('l.dateAdded', 'DESC');
-
-        $results = $q->getQuery()->getResult();
+        $entities = $q->getQuery()->getResult();
 
         /** @var Lead $lead */
-        foreach ($results as $lead) {
+        foreach ($entities as $lead) {
             $lead->setAvailableSocialFields($this->availableSocialFields);
             if (!empty($this->triggerModel)) {
                 $lead->setColor($this->triggerModel->getColorForLeadPoints($lead->getPoints()));
             }
 
-            $fieldValues = $this->getFieldValues($lead->getId());
-            $lead->setFields($fieldValues);
+            $lead->setFields(
+                $this->formatFieldValues($leads[$lead->getId()])
+            );
         }
 
-        return $results;
+        return $entities;
     }
 
     /**
@@ -190,7 +212,7 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
      */
     public function getLeadIdsByUniqueFields($uniqueFieldsWithData, $leadId = null)
     {
-        $q = $this->_em->getConnection()->createQueryBuilder()
+        $q = $this->getEntityManager()->getConnection()->createQueryBuilder()
             ->select('l.id')
             ->from(MAUTIC_TABLE_PREFIX.'leads', 'l');
 
@@ -219,7 +241,7 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
      */
     public function getLeadByEmail($email, $all = false)
     {
-        $q = $this->_em->getConnection()->createQueryBuilder()
+        $q = $this->getEntityManager()->getConnection()->createQueryBuilder()
             ->select('l.id')
             ->from(MAUTIC_TABLE_PREFIX.'leads', 'l')
             ->where('LOWER(email) = :search')
@@ -267,7 +289,7 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
      */
     public function getLead($id)
     {
-        $fq = $this->_em->getConnection()->createQueryBuilder();
+        $fq = $this->getEntityManager()->getConnection()->createQueryBuilder();
         $fq->select('l.*')
             ->from(MAUTIC_TABLE_PREFIX.'leads', 'l')
             ->where('l.id = '.$id);
@@ -286,16 +308,18 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
     public function getEntity($id = 0)
     {
         try {
-            /** @var Lead $entity */
-            $entity = $this
-                ->createQueryBuilder('l')
-                ->select('l, u, i')
-                ->leftJoin('l.ipAddresses', 'i')
-                ->leftJoin('l.owner', 'u')
-                ->where('l.id = :leadId')
-                ->setParameter('leadId', $id)
-                ->getQuery()
-                ->getSingleResult();
+            $q = $this->createQueryBuilder($this->getTableAlias());
+            if (is_array($id)) {
+                $this->buildSelectClause($q, $id);
+                $contactId = (int) $id['id'];
+            } else {
+                $q->select('l, u, i')
+                    ->leftJoin('l.ipAddresses', 'i')
+                    ->leftJoin('l.owner', 'u');
+                $contactId = $id;
+            }
+            $q->andWhere($this->getTableAlias().'.id = '.(int) $contactId);
+            $entity = $q->getQuery()->getSingleResult();
         } catch (\Exception $e) {
             $entity = null;
         }
@@ -315,20 +339,133 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
     }
 
     /**
+     * Get a contact entity with the primary company data populated.
+     *
+     * The primary company data will be a flat array on the entity
+     * with a key of `primaryCompany`
+     *
+     * @param mixed $entity
+     *
+     * @return mixed|null
+     */
+    public function getEntityWithPrimaryCompany($entity)
+    {
+        if (is_int($entity)) {
+            $entity = $this->getEntity($entity);
+        }
+
+        if ($entity instanceof Lead) {
+            $id        = $entity->getId();
+            $companies = $this->getEntityManager()->getRepository('MauticLeadBundle:Company')->getCompaniesForContacts([$id]);
+
+            if (!empty($companies[$id])) {
+                $primary = null;
+
+                foreach ($companies as $company) {
+                    if (isset($company['is_primary']) && $company['is_primary'] == 1) {
+                        $primary = $company;
+                    }
+                }
+
+                if (empty($primary)) {
+                    $primary = $companies[$id][0];
+                }
+
+                $entity->setPrimaryCompany($primary);
+            }
+        }
+
+        return $entity;
+    }
+
+    /**
      * Get a list of leads.
      *
      * @param array $args
      *
      * @return array
      */
-    public function getEntities($args = [])
+    public function getEntities(array $args = [])
     {
-        return $this->getEntitiesWithCustomFields('lead', $args, function ($r) {
-            if (!empty($this->triggerModel)) {
-                $r->setColor($this->triggerModel->getColorForLeadPoints($r->getPoints()));
+        $contacts = $this->getEntitiesWithCustomFields(
+            'lead',
+            $args,
+            function ($r) {
+                if (!empty($this->triggerModel)) {
+                    $r->setColor($this->triggerModel->getColorForLeadPoints($r->getPoints()));
+                }
+                $r->setAvailableSocialFields($this->availableSocialFields);
             }
-            $r->setAvailableSocialFields($this->availableSocialFields);
-        });
+        );
+
+        $contactCount = isset($contacts['results']) ? count($contacts['results']) : count($contacts);
+        if ($contactCount && (!empty($args['withPrimaryCompany']) || !empty($args['withChannelRules']))) {
+            $withTotalCount = (array_key_exists('withTotalCount', $args) && $args['withTotalCount']);
+            /** @var Lead[] $tmpContacts */
+            $tmpContacts = ($withTotalCount) ? $contacts['results'] : $contacts;
+
+            $withCompanies   = !empty($args['withPrimaryCompany']);
+            $withPreferences = !empty($args['withChannelRules']);
+            $contactIds      = array_keys($tmpContacts);
+
+            if ($withCompanies) {
+                $companies = $this->getEntityManager()->getRepository('MauticLeadBundle:Company')->getCompaniesForContacts($contactIds);
+            }
+
+            if ($withPreferences) {
+                /** @var FrequencyRuleRepository $frequencyRepo */
+                $frequencyRepo  = $this->getEntityManager()->getRepository('MauticLeadBundle:FrequencyRule');
+                $frequencyRules = $frequencyRepo->getFrequencyRules(null, $contactIds);
+
+                /** @var DoNotContactRepository $dncRepository */
+                $dncRepository = $this->getEntityManager()->getRepository('MauticLeadBundle:DoNotContact');
+                $dncRules      = $dncRepository->getChannelList(null, $contactIds);
+            }
+
+            foreach ($contactIds as $id) {
+                if ($withCompanies && isset($companies[$id]) && !empty($companies[$id])) {
+                    $primary = null;
+
+                    // Try to find the primary company
+                    foreach ($companies[$id] as $company) {
+                        if ($company['is_primary'] == 1) {
+                            $primary = $company;
+                        }
+                    }
+
+                    // If no primary was found, just grab the first
+                    if (empty($primary)) {
+                        $primary = $companies[$id][0];
+                    }
+
+                    if (is_array($tmpContacts[$id])) {
+                        $tmpContacts[$id]['primaryCompany'] = $primary;
+                    } elseif ($tmpContacts[$id] instanceof Lead) {
+                        $tmpContacts[$id]->setPrimaryCompany($primary);
+                    }
+                }
+
+                if ($withPreferences) {
+                    $contactFrequencyRules = (isset($frequencyRules[$id])) ? $frequencyRules[$id] : [];
+                    $contactDncRules       = (isset($dncRules[$id])) ? $dncRules[$id] : [];
+
+                    $channelRules = Lead::generateChannelRules($contactFrequencyRules, $contactDncRules);
+                    if (is_array($tmpContacts[$id])) {
+                        $tmpContacts[$id]['channelRules'] = $channelRules;
+                    } elseif ($tmpContacts[$id] instanceof Lead) {
+                        $tmpContacts[$id]->setChannelRules($channelRules);
+                    }
+                }
+            }
+
+            if ($withTotalCount) {
+                $contacts['results'] = $tmpContacts;
+            } else {
+                $contacts = $tmpContacts;
+            }
+        }
+
+        return $contacts;
     }
 
     /**
@@ -364,7 +501,8 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
         $q->select($alias.', u, i,'.$order)
             ->from('MauticLeadBundle:Lead', $alias, $alias.'.id')
             ->leftJoin($alias.'.ipAddresses', 'i')
-            ->leftJoin($alias.'.owner', 'u');
+            ->leftJoin($alias.'.owner', 'u')
+            ->indexBy($alias, $alias.'.id');
 
         return $q;
     }
@@ -376,36 +514,66 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
      * @param        $joinTable
      * @param        $entityId
      * @param array  $filters
-     * @param string $contactColumnName
+     * @param string $entityColumnName
+     * @param array  $additionalJoins  [ ['type' => 'join|leftJoin', 'from_alias' => '', 'table' => '', 'condition' => ''], ... ]
      *
      * @return array
      */
-    public function getEntityContacts($args, $joinTable, $entityId, $filters = [], $contactColumnName = 'id')
+    public function getEntityContacts($args, $joinTable, $entityId, $filters = [], $entityColumnName = 'id', array $additionalJoins = null, $contactColumnName = 'lead_id')
     {
-        $qb = $this->getEntityManager()->getConnection()->createQueryBuilder();
+        $qb = $this->getEntitiesDbalQueryBuilder();
 
-        $qb->select('null')
-            ->from(MAUTIC_TABLE_PREFIX.$joinTable, 'entity')
-            ->where(
-                $qb->expr()->andX(
-                    $qb->expr()->eq('l.id', 'entity.lead_id'),
-                    $qb->expr()->eq("entity.{$contactColumnName}", (int) $entityId)
-                )
+        if (empty($contactColumnName)) {
+            $contactColumnName = 'lead_id';
+        }
+
+        $joinCondition = $qb->expr()->andX(
+            $qb->expr()->eq($this->getTableAlias().'.id', 'entity.'.$contactColumnName)
+        );
+
+        if ($entityId && $entityColumnName) {
+            $joinCondition->add(
+                $qb->expr()->eq("entity.{$entityColumnName}", (int) $entityId)
             );
+        }
 
-        $parameters = [];
-        if ($filters) {
-            foreach ($filters as $column => $value) {
-                $parameterName = $this->generateRandomParameterName();
-                $qb->andWhere(
-                    $qb->expr()->eq("entity.{$column}", ":{$parameterName}")
+        $qb->join(
+            $this->getTableAlias(),
+            MAUTIC_TABLE_PREFIX.$joinTable,
+            'entity',
+            $joinCondition
+        );
+
+        if (is_array($additionalJoins)) {
+            foreach ($additionalJoins as $t) {
+                $qb->{$t['type']}(
+                    $t['from_alias'],
+                    MAUTIC_TABLE_PREFIX.$t['table'],
+                    $t['alias'],
+                    $t['condition']
                 );
-                $parameters[$parameterName] = $value;
             }
         }
 
-        $args['entity_query']      = $qb;
-        $args['entity_parameters'] = $parameters;
+        if ($filters) {
+            $expr = $qb->expr()->andX();
+            foreach ($filters as $column => $value) {
+                if (is_array($value)) {
+                    $this->buildWhereClauseFromArray($qb, [$value]);
+                } else {
+                    if (strpos($column, '.') === false) {
+                        $column = "entity.$column";
+                    }
+
+                    $expr->add(
+                        $qb->expr()->eq($column, $qb->createNamedParameter($value))
+                    );
+                    $qb->andWhere($expr);
+                }
+            }
+        }
+
+        $args['qb'] = $qb;
 
         return $this->getEntities($args);
     }
@@ -413,12 +581,12 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
     /**
      * Adds the "catch all" where clause to the QueryBuilder.
      *
-     * @param QueryBuilder $q
-     * @param              $filter
+     * @param \Doctrine\ORM\QueryBuilder|\Doctrine\DBAL\Query\QueryBuilder $q
+     * @param                                                              $filter
      *
      * @return array
      */
-    protected function addCatchAllWhereClause(&$q, $filter)
+    protected function addCatchAllWhereClause($q, $filter)
     {
         $columns = array_merge(
             [
@@ -440,172 +608,227 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
     /**
      * Adds the command where clause to the QueryBuilder.
      *
-     * @param QueryBuilder $q
-     * @param              $filter
+     * @param \Doctrine\ORM\QueryBuilder|\Doctrine\DBAL\Query\QueryBuilder $q
+     * @param                                                              $filter
      *
      * @return array
      */
-    protected function addSearchCommandWhereClause(&$q, $filter)
+    protected function addSearchCommandWhereClause($q, $filter)
     {
-        $command         = $filter->command;
-        $string          = $filter->string;
-        $unique          = $this->generateRandomParameterName();
-        $returnParameter = true; //returning a parameter that is not used will lead to a Doctrine error
-        $expr            = false;
-        $parameters      = [];
-        $joins           = $q->getQueryPart('join');
+        $command                 = $filter->command;
+        $string                  = $filter->string;
+        $unique                  = $this->generateRandomParameterName();
+        $returnParameter         = false; //returning a parameter that is not used will lead to a Doctrine error
+        list($expr, $parameters) = parent::addSearchCommandWhereClause($q, $filter);
 
         //DBAL QueryBuilder does not have an expr()->not() function; boo!!
-        if ($filter->not) {
-            $xFunc      = 'orX';
-            $existsFunc = 'NOT EXISTS';
-            $eqFunc     = 'neq';
-            $nullFunc   = 'isNotNull';
-            $likeFunc   = 'notLike';
-        } else {
-            $xFunc      = 'andX';
-            $existsFunc = 'EXISTS';
-            $eqFunc     = 'eq';
-            $nullFunc   = 'isNull';
-            $likeFunc   = 'like';
-        }
+
+        // This will be switched by some commands that use join tables as NOT EXISTS queries will be used
+        $exprType = ($filter->not) ? 'negate_expr' : 'expr';
+
+        $operators = $this->getFilterExpressionFunctions();
+        $operators = array_merge($operators, [
+            'x' => [
+                'expr'        => 'andX',
+                'negate_expr' => 'orX',
+            ],
+            'null' => [
+                'expr'        => 'isNull',
+                'negate_expr' => 'isNotNull',
+            ],
+        ]);
+
+        $innerJoinTables = (isset($this->advancedFilterCommands[$command])
+            && SearchStringHelper::COMMAND_NEGATE !== $this->advancedFilterCommands[$command]);
+        $likeExpr = $operators['like'][$exprType];
+        $eqExpr   = $operators['='][$exprType];
+        $nullExpr = $operators['null'][$exprType];
+        $inExpr   = $operators['in'][$exprType];
+        $xExpr    = $operators['x'][$exprType];
+
         switch ($command) {
             case $this->translator->trans('mautic.lead.lead.searchcommand.isanonymous'):
-                $expr = $q->expr()->$xFunc(
-                    $q->expr()->$nullFunc('l.date_identified')
-                );
-                $returnParameter = false;
+            case $this->translator->trans('mautic.lead.lead.searchcommand.isanonymous', [], null, 'en_US'):
+                $expr = $q->expr()->$nullExpr('l.date_identified');
                 break;
             case $this->translator->trans('mautic.core.searchcommand.ismine'):
-                $expr            = $q->expr()->$eqFunc('l.owner_id', $this->currentUser->getId());
-                $returnParameter = false;
+            case $this->translator->trans('mautic.core.searchcommand.ismine', [], null, 'en_US'):
+                $expr = $q->expr()->$eqExpr('l.owner_id', $this->currentUser->getId());
                 break;
             case $this->translator->trans('mautic.lead.lead.searchcommand.isunowned'):
+            case $this->translator->trans('mautic.lead.lead.searchcommand.isunowned', [], null, 'en_US'):
                 $expr = $q->expr()->orX(
-                    $q->expr()->$eqFunc('l.owner_id', 0),
-                    $q->expr()->$nullFunc('l.owner_id')
+                    $q->expr()->$eqExpr('l.owner_id', 0),
+                    $q->expr()->$nullExpr('l.owner_id')
                 );
-                $returnParameter = false;
                 break;
             case $this->translator->trans('mautic.lead.lead.searchcommand.owner'):
+            case $this->translator->trans('mautic.lead.lead.searchcommand.owner', [], null, 'en_US'):
                 $expr = $q->expr()->orX(
-                    $q->expr()->$likeFunc('u.first_name', ':'.$unique),
-                    $q->expr()->$likeFunc('u.last_name', ':'.$unique)
+                    $q->expr()->$likeExpr('u.first_name', ':'.$unique),
+                    $q->expr()->$likeExpr('u.last_name', ':'.$unique)
                 );
+                $returnParameter = true;
                 break;
             case $this->translator->trans('mautic.core.searchcommand.name'):
+            case $this->translator->trans('mautic.core.searchcommand.name', [], null, 'en_US'):
                 $expr = $q->expr()->orX(
-                    $q->expr()->$likeFunc('l.firstname', ":$unique"),
-                    $q->expr()->$likeFunc('l.lastname', ":$unique")
+                    $q->expr()->$likeExpr('l.firstname', ":$unique"),
+                    $q->expr()->$likeExpr('l.lastname', ":$unique")
                 );
+                $returnParameter = true;
+                break;
+            case $this->translator->trans('mautic.core.searchcommand.email'):
+            case $this->translator->trans('mautic.core.searchcommand.email', [], null, 'en_US'):
+                $expr            = $q->expr()->$likeExpr('l.email', ":$unique");
+                $returnParameter = true;
                 break;
             case $this->translator->trans('mautic.lead.lead.searchcommand.list'):
-                if (!array_key_exists('list_lead', $joins)) {
-                    $q->join('l', MAUTIC_TABLE_PREFIX.'lead_lists_leads', 'list_lead', 'l.id = list_lead.lead_id')
-                        ->join('list_lead', MAUTIC_TABLE_PREFIX.'lead_lists', 'list', 'list_lead.leadlist_id = list.id');
-                }
-
-                $expr = $q->expr()->andX(
-                    $q->expr()->eq('list_lead.manually_removed', 0),
-                    $q->expr()->$likeFunc('list.alias', ":$unique")
+            case $this->translator->trans('mautic.lead.lead.searchcommand.list', [], null, 'en_US'):
+                $this->applySearchQueryRelationship(
+                    $q,
+                    [
+                        [
+                            'from_alias' => 'l',
+                            'table'      => 'lead_lists_leads',
+                            'alias'      => 'list_lead',
+                            'condition'  => 'l.id = list_lead.lead_id',
+                        ],
+                        [
+                            'from_alias' => 'list_lead',
+                            'table'      => 'lead_lists',
+                            'alias'      => 'list',
+                            'condition'  => 'list_lead.leadlist_id = list.id',
+                        ],
+                    ],
+                    $innerJoinTables,
+                    $this->generateFilterExpression($q, 'list.alias', $eqExpr, $unique, ($filter->not) ? true : null,
+                        // orX for filter->not either manuall removed or is null
+                        $q->expr()->$xExpr(
+                            $q->expr()->$eqExpr('list_lead.manually_removed', 0)
+                        )
+                    )
                 );
+                $filter->strict  = true;
+                $returnParameter = true;
 
                 break;
             case $this->translator->trans('mautic.core.searchcommand.ip'):
-                if (!array_key_exists('ip_lead', $joins)) {
-                    $q->join('l', MAUTIC_TABLE_PREFIX.'lead_ips_xref', 'ip_lead', 'l.id = ip_lead.lead_id')
-                        ->join('ip_lead', MAUTIC_TABLE_PREFIX.'ip_addresses', 'ip', 'ip_lead.ip_id = ip.id');
-                }
+            case $this->translator->trans('mautic.core.searchcommand.ip', [], null, 'en_US'):
+                $this->applySearchQueryRelationship(
+                    $q,
+                    [
+                        [
+                            'from_alias' => 'l',
+                            'table'      => 'lead_ips_xref',
+                            'alias'      => 'ip_lead',
+                            'condition'  => 'l.id = ip_lead.lead_id',
+                        ],
+                        [
+                            'from_alias' => 'ip_lead',
+                            'table'      => 'ip_addresses',
+                            'alias'      => 'ip',
+                            'condition'  => 'ip_lead.ip_id = ip.id',
+                        ],
+                    ],
+                    $innerJoinTables,
+                    $this->generateFilterExpression($q, 'ip.ip_address', $likeExpr, $unique, null)
+                );
+                $returnParameter = true;
 
-                $expr = $q->expr()->$likeFunc('ip.ip_address', ":$unique");
-
-                // Unique leads in case they are in multiple matching companies
-                $q->groupBy('l.id');
                 break;
             case $this->translator->trans('mautic.lead.lead.searchcommand.duplicate'):
-                if (!array_key_exists('list_lead', $joins)) {
-                    $q->join('l', MAUTIC_TABLE_PREFIX.'lead_lists_leads', 'list_lead', 'l.id = list_lead.lead_id')
-                        ->join('list_lead', MAUTIC_TABLE_PREFIX.'lead_lists', 'list', 'list_lead.leadlist_id = list.id');
-                }
-
-                $prateek = explode('+', $string);
-
+            case $this->translator->trans('mautic.lead.lead.searchcommand.duplicate', [], null, 'en_US'):
+                $prateek  = explode('+', $string);
                 $imploder = [];
 
                 foreach ($prateek as $key => $value) {
-                    $list       = $this->_em->getRepository('MauticLeadBundle:LeadList')->findOneByAlias($value);
+                    $list       = $this->getEntityManager()->getRepository('MauticLeadBundle:LeadList')->findOneByAlias($value);
                     $imploder[] = ((!empty($list)) ? (int) $list->getId() : 0);
                 }
 
-                //logic. In query, Sum(manuall_removed should be less than the current)
-                $pluck = sizeof($imploder) - 1;
-
+                //logic. In query, Sum(manually_removed) should be less than the current)
+                $pluck    = count($imploder);
                 $imploder = (string) (implode(',', $imploder));
 
-                $sq = $this->_em->getConnection()->createQueryBuilder();
-                $sq->select('lll.lead_id')
-                    ->from(MAUTIC_TABLE_PREFIX.'lead_lists_leads', 'lll')
-                    ->where('lll.leadlist_id in ( '.$imploder.' )')
-                    //-> where("lll.leadlist_id in ( :imploder )")
-                    ->groupBy('lll.lead_id')
-                    ->having('COUNT(lll.lead_id) > :counting AND SUM(lll.manually_removed) < :counting')
-                    ->setParameter('counting', $pluck)
-                    //-> setParameter('imploder', $imploder)
-                ;
+                $sq = $this->getEntityManager()->getConnection()->createQueryBuilder();
+                $sq->select('duplicate.lead_id')
+                    ->from(MAUTIC_TABLE_PREFIX.'lead_lists_leads', 'duplicate')
+                    ->where(
+                        $q->expr()->andX(
+                            $q->expr()->in('duplicate.leadlist_id', $imploder),
+                            $q->expr()->eq('duplicate.manually_removed', 0)
+                        )
+                    )
+                    ->groupBy('duplicate.lead_id')
+                    ->having("COUNT(duplicate.lead_id) = $pluck");
 
-                $results = $sq->execute()->fetchAll();
-
-                $leadIds = [];
-                foreach ($results as $row) {
-                    $leadIds[] = $row['lead_id'];
-                }
-                if (!sizeof($leadIds)) {
-                    $leadIds[0] = 0;
-                }
-                $expr = $q->expr()->in('l.id', $leadIds);
+                $expr            = $q->expr()->$inExpr('l.id', sprintf('(%s)', $sq->getSQL()));
+                $returnParameter = true;
 
                 break;
             case $this->translator->trans('mautic.lead.lead.searchcommand.tag'):
-                if (!array_key_exists('tag', $joins)) {
-                    $q->join('l', MAUTIC_TABLE_PREFIX.'lead_tags_xref', 'xtag', 'l.id = xtag.lead_id')
-                        ->join('xtag', MAUTIC_TABLE_PREFIX.'lead_tags', 'tag', 'xtag.tag_id = tag.id');
-                }
-
-                $expr = $q->expr()->$likeFunc('tag.tag', ":$unique");
-
-                // Unique leads in case they are in multiple matching companies
-                $q->groupBy('l.id');
-                break;
-            case $this->translator->trans('mautic.core.searchcommand.email'):
-                $expr = $q->expr()->$likeFunc('l.email', ":$unique");
+            case $this->translator->trans('mautic.lead.lead.searchcommand.tag', [], null, 'en_US'):
+                $this->applySearchQueryRelationship(
+                    $q,
+                    [
+                        [
+                            'from_alias' => 'l',
+                            'table'      => 'lead_tags_xref',
+                            'alias'      => 'xtag',
+                            'condition'  => 'l.id = xtag.lead_id',
+                        ],
+                        [
+                            'from_alias' => 'xtag',
+                            'table'      => 'lead_tags',
+                            'alias'      => 'tag',
+                            'condition'  => 'xtag.tag_id = tag.id',
+                        ],
+                    ],
+                    $innerJoinTables,
+                    $this->generateFilterExpression($q, 'tag.tag', $likeExpr, $unique, null)
+                );
+                $returnParameter = true;
                 break;
             case $this->translator->trans('mautic.lead.lead.searchcommand.company'):
-                $expr = $q->expr()->$likeFunc('l.company', ":$unique");
-                break;
-            case $this->translator->trans('mautic.company.lead.searchcommand.company'):
-                if (!array_key_exists('comp_lead', $joins)) {
-                    $q->join('l', MAUTIC_TABLE_PREFIX.'companies_leads', 'comp_lead', 'l.id = comp_lead.lead_id')
-                        ->join('comp_lead', MAUTIC_TABLE_PREFIX.'companies', 'comp', 'comp_lead.company_id = comp.id');
-                }
-
-                $expr = $q->expr()->$likeFunc('comp.companyname', ":$unique");
-
-                // Unique leads in case they are in multiple matching companies
-                $q->groupBy('l.id');
+            case $this->translator->trans('mautic.lead.lead.searchcommand.company', [], null, 'en_US'):
+                $this->applySearchQueryRelationship(
+                    $q,
+                    [
+                        [
+                            'from_alias' => 'l',
+                            'table'      => 'companies_leads',
+                            'alias'      => 'comp_lead',
+                            'condition'  => 'l.id = comp_lead.lead_id',
+                        ],
+                        [
+                            'from_alias' => 'comp_lead',
+                            'table'      => 'companies',
+                            'alias'      => 'comp',
+                            'condition'  => 'comp_lead.company_id = comp.id',
+                        ],
+                    ],
+                    $innerJoinTables,
+                    $this->generateFilterExpression($q, 'comp.companyname', $likeExpr, $unique, null)
+                );
+                $returnParameter = true;
                 break;
             default:
                 if (in_array($command, $this->availableSearchFields)) {
-                    $expr = $q->expr()->$likeFunc('LOWER(l.'.$command.')', ":$unique");
+                    $expr = $q->expr()->$likeExpr("l.$command", ":$unique");
                 }
+                $returnParameter = true;
                 break;
         }
 
-        $string              = ($filter->strict) ? $filter->string : "{$filter->string}%";
-        $parameters[$unique] = $string;
+        if ($returnParameter) {
+            $string              = ($filter->strict) ? $filter->string : "{$filter->string}%";
+            $parameters[$unique] = $string;
+        }
 
         return [
             $expr,
-            ($returnParameter) ? $parameters : [],
+            $parameters,
         ];
     }
 
@@ -628,7 +851,6 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
             'mautic.core.searchcommand.ip',
             'mautic.lead.lead.searchcommand.tag',
             'mautic.lead.lead.searchcommand.stage',
-            'mautic.company.lead.searchcommand.company',
             'mautic.lead.lead.searchcommand.duplicate',
         ];
 
@@ -636,7 +858,7 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
             $commands = array_merge($commands, $this->availableSearchFields);
         }
 
-        return $commands;
+        return array_merge($commands, parent::getSearchCommands());
     }
 
     /**
@@ -661,7 +883,7 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
         $dt     = new DateTimeHelper();
         $fields = ['last_active' => $dt->toUtcString()];
 
-        $this->_em->getConnection()->update(MAUTIC_TABLE_PREFIX.'leads', $fields, ['id' => $leadId]);
+        $this->getEntityManager()->getConnection()->update(MAUTIC_TABLE_PREFIX.'leads', $fields, ['id' => $leadId]);
     }
 
     /**
@@ -671,7 +893,7 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
      */
     public function getMaxLeadId()
     {
-        $result = $this->_em->getConnection()->createQueryBuilder()
+        $result = $this->getEntityManager()->getConnection()->createQueryBuilder()
             ->select('max(id) as max_lead_id')
             ->from(MAUTIC_TABLE_PREFIX.'leads', 'l')
             ->execute()->fetchAll();
@@ -692,7 +914,7 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
             return false;
         }
 
-        $q = $this->_em->getConnection()->createQueryBuilder()
+        $q = $this->getEntityManager()->getConnection()->createQueryBuilder()
             ->select('u.id, u.first_name, u.last_name, u.email, u.signature')
             ->from(MAUTIC_TABLE_PREFIX.'users', 'u')
             ->where('u.id = :ownerId')
@@ -708,6 +930,36 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
         }
 
         return $result;
+    }
+
+    /**
+     * Check lead owner.
+     *
+     * @param Lead  $lead
+     * @param array $ownerIds
+     *
+     * @return array|false
+     */
+    public function checkLeadOwner(Lead $lead, $ownerIds = [])
+    {
+        if (empty($ownerIds)) {
+            return false;
+        }
+
+        $q = $this->getEntityManager()->getConnection()->createQueryBuilder();
+        $q->select('u.id')
+            ->from(MAUTIC_TABLE_PREFIX.'users', 'u')
+            ->join('u', MAUTIC_TABLE_PREFIX.'leads', 'l', 'l.owner_id = u.id')
+            ->where(
+                $q->expr()->andX(
+                    $q->expr()->in('u.id', ':ownerIds'),
+                    $q->expr()->eq('l.id', ':leadId')
+                )
+            )
+            ->setParameter('ownerIds', implode(',', $ownerIds))
+            ->setParameter('leadId', $lead->getId());
+
+        return (bool) $q->execute()->fetchColumn();
     }
 
     /**
@@ -744,5 +996,43 @@ class LeadRepository extends CommonRepository implements CustomFieldRepositoryIn
     public function getTableAlias()
     {
         return 'l';
+    }
+
+    /**
+     * @param QueryBuilder $q
+     * @param array        $tables          $tables[0] should be primary table
+     * @param bool         $innerJoinTables
+     * @param null         $whereExpression
+     * @param null         $having
+     */
+    protected function applySearchQueryRelationship(QueryBuilder $q, array $tables, $innerJoinTables, $whereExpression = null, $having = null)
+    {
+        $primaryTable = $tables[0];
+        unset($tables[0]);
+
+        $joinType = ($innerJoinTables) ? 'join' : 'leftJoin';
+
+        $this->useDistinctCount = true;
+        $joins                  = $q->getQueryPart('join');
+        if (!array_key_exists($primaryTable['alias'], $joins)) {
+            $q->$joinType(
+                $primaryTable['from_alias'],
+                MAUTIC_TABLE_PREFIX.$primaryTable['table'],
+                $primaryTable['alias'],
+                $primaryTable['condition']
+            );
+            foreach ($tables as $table) {
+                $q->$joinType($table['from_alias'], MAUTIC_TABLE_PREFIX.$table['table'], $table['alias'], $table['condition']);
+            }
+
+            if ($whereExpression) {
+                $q->andWhere($whereExpression);
+            }
+
+            if ($having) {
+                $q->andHaving($having);
+            }
+            $q->groupBy('l.id');
+        }
     }
 }

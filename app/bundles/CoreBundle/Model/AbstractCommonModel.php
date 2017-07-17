@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2016 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -14,6 +15,7 @@ use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Mautic\CoreBundle\Entity\CommonRepository;
 use Mautic\CoreBundle\Factory\MauticFactory;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
 use Mautic\CoreBundle\Helper\UserHelper;
 use Mautic\CoreBundle\Security\Permissions\CorePermissions;
 use Psr\Log\LoggerInterface;
@@ -82,6 +84,11 @@ abstract class AbstractCommonModel
     protected $logger;
 
     /**
+     * @var CoreParametersHelper
+     */
+    protected $coreParametersHelper;
+
+    /**
      * @param EntityManager $em
      */
     public function setEntityManager(EntityManager $em)
@@ -137,6 +144,16 @@ abstract class AbstractCommonModel
     public function setUserHelper(UserHelper $userHelper)
     {
         $this->userHelper = $userHelper;
+    }
+
+    /**
+     * Initialize the CoreParameters parameter.
+     *
+     * @param CoreParametersHelper $coreParametersHelper
+     */
+    public function setCoreParametersHelper(CoreParametersHelper $coreParametersHelper)
+    {
+        $this->coreParametersHelper = $coreParametersHelper;
     }
 
     /**
@@ -212,7 +229,7 @@ abstract class AbstractCommonModel
     /**
      * Get a specific entity.
      *
-     * @param $id
+     * @param int|array id
      *
      * @return null|object
      */
@@ -224,7 +241,7 @@ abstract class AbstractCommonModel
                 return $repo->getEntity($id);
             }
 
-            return $repo->find($id);
+            return $repo->find((int) $id);
         }
 
         return null;
@@ -267,10 +284,11 @@ abstract class AbstractCommonModel
      * @param array $routeParams
      * @param bool  $absolute
      * @param array $clickthrough
+     * @param array $utmTags
      *
      * @return string
      */
-    public function buildUrl($route, $routeParams = [], $absolute = true, $clickthrough = [])
+    public function buildUrl($route, $routeParams = [], $absolute = true, $clickthrough = [], $utmTags = [])
     {
         $url = $this->router->generate($route, $routeParams, $absolute);
         $url .= (!empty($clickthrough)) ? '?ct='.$this->encodeArrayForUrl($clickthrough) : '';

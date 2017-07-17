@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -14,7 +15,7 @@ use Mautic\PluginBundle\Exception\ApiErrorException;
 
 class MailchimpApi extends EmailMarketingApi
 {
-    private $version = '2.0';
+    private $version = '3.0';
 
     /**
      * @param        $endpoint
@@ -61,7 +62,7 @@ class MailchimpApi extends EmailMarketingApi
 
     public function getLists()
     {
-        return $this->request('lists/list', ['limit' => 100]);
+        return $this->request('lists', ['limit' => 100]);
     }
 
     /**
@@ -73,7 +74,7 @@ class MailchimpApi extends EmailMarketingApi
      */
     public function getCustomFields($listId)
     {
-        return $this->request('lists/merge-vars', ['id' => [$listId]]);
+        return $this->request('lists/'.$listId.'/merge-fields');
     }
 
     /**
@@ -92,11 +93,12 @@ class MailchimpApi extends EmailMarketingApi
         $emailStruct->email = $email;
 
         $parameters = array_merge($config, [
-            'id'         => $listId,
-            'merge_vars' => $fields,
+            'id'           => $listId,
+            'merge_fields' => $fields,
         ]);
-        $parameters['email'] = $emailStruct;
+        $parameters['email_address'] = $email;
+        $parameters['status']        = 'subscribed';
 
-        return $this->request('lists/subscribe', $parameters, 'POST');
+        return $this->request('lists/'.$listId.'/members', $parameters, 'POST');
     }
 }

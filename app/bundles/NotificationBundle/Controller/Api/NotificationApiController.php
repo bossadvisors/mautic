@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2016 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -12,12 +13,26 @@ namespace Mautic\NotificationBundle\Controller\Api;
 
 use Mautic\ApiBundle\Controller\CommonApiController;
 use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpKernel\Event\FilterControllerEvent;
 
 /**
  * Class NotificationApiController.
  */
 class NotificationApiController extends CommonApiController
 {
+    /**
+     * {@inheritdoc}
+     */
+    public function initialize(FilterControllerEvent $event)
+    {
+        $this->model           = $this->getModel('notification');
+        $this->entityClass     = 'Mautic\NotificationBundle\Entity\Notification';
+        $this->entityNameOne   = 'notification';
+        $this->entityNameMulti = 'notifications';
+
+        parent::initialize($event);
+    }
+
     /**
      * Receive Web Push subscription request.
      *
@@ -26,7 +41,6 @@ class NotificationApiController extends CommonApiController
     public function subscribeAction()
     {
         $osid = $this->request->get('osid');
-
         if ($osid) {
             /** @var \Mautic\LeadBundle\Model\LeadModel $leadModel */
             $leadModel = $this->getModel('lead');
@@ -37,7 +51,7 @@ class NotificationApiController extends CommonApiController
 
             $leadModel->saveEntity($currentLead);
 
-            return new JsonResponse(['success' => true], 200, ['Access-Control-Allow-Origin' => '*']);
+            return new JsonResponse(['success' => true, 'osid' => $osid], 200, ['Access-Control-Allow-Origin' => '*']);
         }
 
         return new JsonResponse(['success' => 'false'], 200, ['Access-Control-Allow-Origin' => '*']);

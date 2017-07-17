@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -7,11 +8,13 @@
  *
  * @license     GNU/GPLv3 http://www.gnu.org/licenses/gpl-3.0.html
  */
+
 namespace Mautic\FormBundle\Controller;
 
 use Mautic\CoreBundle\Controller\FormController as CommonFormController;
 use Mautic\FormBundle\Entity\Field;
 use Mautic\FormBundle\Entity\Form;
+use Mautic\FormBundle\Exception\ValidationException;
 use Mautic\FormBundle\Model\FormModel;
 use Symfony\Component\Form\FormError;
 use Symfony\Component\HttpFoundation\Response;
@@ -250,6 +253,7 @@ class FormController extends CommonFormController
                     'activeFormFields'  => $activeFormFields,
                     'formScript'        => htmlspecialchars($model->getFormScript($activeForm), ENT_QUOTES, 'UTF-8'),
                     'formContent'       => htmlspecialchars($model->getContent($activeForm, false), ENT_QUOTES, 'UTF-8'),
+                    'availableActions'  => $customComponents['actions'],
                 ],
                 'contentTemplate' => 'MauticFormBundle:Form:details.html.php',
                 'passthroughVars' => [
@@ -326,6 +330,7 @@ class FormController extends CommonFormController
 
                             // Save the form first and new actions so that new fields are available to actions.
                             // Using the repository function to not trigger the listeners twice.
+
                             $model->getRepository()->saveEntity($entity);
 
                             // Only save actions that are not to be deleted
@@ -363,6 +368,13 @@ class FormController extends CommonFormController
                                 //return edit view so that all the session stuff is loaded
                                 return $this->editAction($entity->getId(), true);
                             }
+                        } catch (ValidationException $ex) {
+                            $form->addError(
+                                new FormError(
+                                    $ex->getMessage()
+                                )
+                            );
+                            $valid = false;
                         } catch (\Exception $e) {
                             $form['name']->addError(
                                 new FormError($this->get('translator')->trans('mautic.form.schema.failed', [], 'validators'))
@@ -439,6 +451,7 @@ class FormController extends CommonFormController
                     'activeForm'     => $entity,
                     'form'           => $form->createView(),
                     'contactFields'  => $this->getModel('lead.field')->getFieldListWithProperties(),
+                    'inBuilder'      => true,
                 ],
                 'contentTemplate' => 'MauticFormBundle:Builder:index.html.php',
                 'passthroughVars' => [
@@ -575,54 +588,63 @@ class FormController extends CommonFormController
 
                         // save the form first so that new fields are available to actions
                         // use the repository method to not trigger listeners twice
-                        $model->getRepository()->saveEntity($entity);
+                        try {
+                            $model->getRepository()->saveEntity($entity);
 
-                        // Ensure actions are compatible with form type
-                        if (!$entity->isStandalone()) {
-                            foreach ($actions as $actionId => $action) {
-                                if (empty($customComponents['actions'][$action['type']]['allowCampaignForm'])) {
-                                    unset($actions[$actionId]);
-                                    $deletedActions[] = $actionId;
+                            // Ensure actions are compatible with form type
+                            if (!$entity->isStandalone()) {
+                                foreach ($actions as $actionId => $action) {
+                                    if (empty($customComponents['actions'][$action['type']]['allowCampaignForm'])) {
+                                        unset($actions[$actionId]);
+                                        $deletedActions[] = $actionId;
+                                    }
                                 }
                             }
-                        }
 
-                        if (count($actions)) {
-                            // Now set and persist the actions
-                            $model->setActions($entity, $actions);
-                        }
+                            if (count($actions)) {
+                                // Now set and persist the actions
+                                $model->setActions($entity, $actions);
+                            }
 
-                        // Delete deleted actions
-                        $model->deleteActions($entity, $deletedActions);
+                            // Delete deleted actions
+                            $model->deleteActions($entity, $deletedActions);
 
-                        // Persist and execute listeners
-                        $model->saveEntity($entity, $form->get('buttons')->get('save')->isClicked());
+                            // Persist and execute listeners
+                            $model->saveEntity($entity, $form->get('buttons')->get('save')->isClicked());
 
-                        // Reset objectId to entity ID (can be session ID in case of cloned entity)
-                        $objectId = $entity->getId();
+                            // Reset objectId to entity ID (can be session ID in case of cloned entity)
+                            $objectId = $entity->getId();
 
-                        $this->addFlash(
-                            'mautic.core.notice.updated',
-                            [
-                                '%name%'      => $entity->getName(),
-                                '%menu_link%' => 'mautic_form_index',
-                                '%url%'       => $this->generateUrl(
-                                    'mautic_form_action',
-                                    [
-                                        'objectAction' => 'edit',
-                                        'objectId'     => $entity->getId(),
-                                    ]
-                                ),
-                            ]
-                        );
+                            $this->addFlash(
+                                'mautic.core.notice.updated',
+                                [
+                                    '%name%'      => $entity->getName(),
+                                    '%menu_link%' => 'mautic_form_index',
+                                    '%url%'       => $this->generateUrl(
+                                        'mautic_form_action',
+                                        [
+                                            'objectAction' => 'edit',
+                                            'objectId'     => $entity->getId(),
+                                        ]
+                                    ),
+                                ]
+                            );
 
-                        if ($form->get('buttons')->get('save')->isClicked()) {
-                            $viewParameters = [
-                                'objectAction' => 'view',
-                                'objectId'     => $entity->getId(),
-                            ];
-                            $returnUrl = $this->generateUrl('mautic_form_action', $viewParameters);
-                            $template  = 'MauticFormBundle:Form:view';
+                            if ($form->get('buttons')->get('save')->isClicked()) {
+                                $viewParameters = [
+                                    'objectAction' => 'view',
+                                    'objectId'     => $entity->getId(),
+                                ];
+                                $returnUrl = $this->generateUrl('mautic_form_action', $viewParameters);
+                                $template  = 'MauticFormBundle:Form:view';
+                            }
+                        } catch (ValidationException $ex) {
+                            $form->addError(
+                                new FormError(
+                                    $ex->getMessage()
+                                )
+                            );
+                            $valid = false;
                         }
                     }
                 }
@@ -688,9 +710,15 @@ class FormController extends CommonFormController
             $modifiedFields = [];
             $usedLeadFields = [];
             $existingFields = $entity->getFields()->toArray();
+            $submitButton   = false;
 
             foreach ($existingFields as $formField) {
                 // Check to see if the field still exists
+
+                if ($formField->getAlias() == 'submit' && $formField->getType() == 'button') {
+                    //submit button found
+                    $submitButton = true;
+                }
                 if ($formField->getType() !== 'button' && !isset($availableFields[$formField->getType()])) {
                     continue;
                 }
@@ -717,7 +745,21 @@ class FormController extends CommonFormController
                     $usedLeadFields[$id] = $field['leadField'];
                 }
             }
+            if (!$submitButton) { //means something deleted the submit button from the form
+                //add a submit button
+                $keyId = 'new'.hash('sha1', uniqid(mt_rand()));
+                $field = new Field();
 
+                $modifiedFields[$keyId]                    = $field->convertToArray();
+                $modifiedFields[$keyId]['label']           = $this->translator->trans('mautic.core.form.submit');
+                $modifiedFields[$keyId]['alias']           = 'submit';
+                $modifiedFields[$keyId]['showLabel']       = 1;
+                $modifiedFields[$keyId]['type']            = 'button';
+                $modifiedFields[$keyId]['id']              = $keyId;
+                $modifiedFields[$keyId]['inputAttributes'] = 'class="btn btn-default"';
+                $modifiedFields[$keyId]['formId']          = $objectId;
+                unset($modifiedFields[$keyId]['form']);
+            }
             $session->set('mautic.form.'.$objectId.'.fields.leadfields', $usedLeadFields);
 
             if (!empty($reorder)) {
@@ -783,6 +825,7 @@ class FormController extends CommonFormController
                     'form'               => $form->createView(),
                     'forceTypeSelection' => $forceTypeSelection,
                     'contactFields'      => $this->getModel('lead.field')->getFieldListWithProperties(),
+                    'inBuilder'          => true,
                 ],
                 'contentTemplate' => 'MauticFormBundle:Builder:index.html.php',
                 'passthroughVars' => [

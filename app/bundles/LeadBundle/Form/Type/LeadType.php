@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -48,7 +49,6 @@ class LeadType extends AbstractType
      */
     public function buildForm(FormBuilderInterface $builder, array $options)
     {
-        $builder->addEventSubscriber(new CleanFormSubscriber());
         $builder->addEventSubscriber(new FormExitSubscriber('lead.lead', $options));
 
         if (!$options['isShortForm']) {
@@ -126,7 +126,7 @@ class LeadType extends AbstractType
         $companies       = $companyLeadRepo->getCompaniesByLeadId($options['data']->getId());
         $leadCompanies   = [];
         foreach ($companies as $company) {
-            $leadCompanies[$company['company_id']] = $company['company_id'];
+            $leadCompanies[(string) $company['company_id']] = (string) $company['company_id'];
         }
 
         $builder->add(
@@ -135,10 +135,10 @@ class LeadType extends AbstractType
             [
                 'label'      => 'mautic.company.selectcompany',
                 'label_attr' => ['class' => 'control-label'],
-                'multiple' => true,
-                'required' => false,
-                'mapped'   => false,
-                'data'     => $leadCompanies,
+                'multiple'   => true,
+                'required'   => false,
+                'mapped'     => false,
+                'data'       => $leadCompanies,
             ]
         );
 
@@ -198,6 +198,8 @@ class LeadType extends AbstractType
                 ]
             );
         }
+
+        $builder->addEventSubscriber(new CleanFormSubscriber(['clean', 'raw', 'email' => 'email']));
 
         if (!empty($options['action'])) {
             $builder->setAction($options['action']);

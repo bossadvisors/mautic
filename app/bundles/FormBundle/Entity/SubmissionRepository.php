@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -43,13 +44,13 @@ class SubmissionRepository extends CommonRepository
     /**
      * {@inheritdoc}
      */
-    public function getEntities($args = [])
+    public function getEntities(array $args = [])
     {
         $form = $args['form'];
 
         //DBAL
         if (!isset($args['viewOnlyFields'])) {
-            $args['viewOnlyFields'] = ['button', 'freetext', 'pagebreak', 'captcha'];
+            $args['viewOnlyFields'] = ['button', 'freetext',  'freehtml', 'pagebreak', 'captcha'];
         }
         $viewOnlyFields = array_map(function ($value) {
             return '"'.$value.'"';

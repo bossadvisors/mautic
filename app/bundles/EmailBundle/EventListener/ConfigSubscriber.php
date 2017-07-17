@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -47,6 +48,9 @@ class ConfigSubscriber extends CommonSubscriber
         ];
     }
 
+    /**
+     * @param ConfigBuilderEvent $event
+     */
     public function onConfigGenerate(ConfigBuilderEvent $event)
     {
         $event->addForm([
@@ -57,6 +61,9 @@ class ConfigSubscriber extends CommonSubscriber
         ]);
     }
 
+    /**
+     * @param ConfigEvent $event
+     */
     public function onConfigBeforeSave(ConfigEvent $event)
     {
         $event->unsetIfEmpty(
@@ -85,27 +92,6 @@ class ConfigSubscriber extends CommonSubscriber
                         $data['monitored_email'][$key]['password']          = '';
                         $data['monitored_email'][$key]['ssl']               = '1';
                         $data['monitored_email'][$key]['port']              = '993';
-                    }
-                }
-            }
-        }
-
-        // Ensure that percent signs are decoded in the unsubscribe/webview settings
-        $decode = [
-            'unsubscribe_text',
-            'webview_text',
-            'unsubscribe_message',
-            'resubscribe_message',
-        ];
-        foreach ($decode as $key) {
-            if (strpos($data[$key], '%') !== false) {
-                $data[$key] = urldecode($data[$key]);
-
-                if (preg_match_all('/([^%]|^)(%{1}[^%]\S+[^%]%{1})([^%]|$)/i', $data[$key], $matches)) {
-                    // Encode any left over to prevent Symfony from crashing
-                    foreach ($matches[0] as $matchKey => $match) {
-                        $replaceWith = $matches[1][$matchKey].'%'.$matches[2][$matchKey].'%'.$matches[3][$matchKey];
-                        $data[$key]  = str_replace($match, $replaceWith, $data[$key]);
                     }
                 }
             }

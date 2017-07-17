@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2014 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -97,7 +98,7 @@ class Submission
             ->columnName('date_submitted')
             ->build();
 
-        $builder->addField('referer', 'string');
+        $builder->addField('referer', 'text');
 
         $builder->createManyToOne('page', 'Mautic\PageBundle\Entity\Page')
             ->addJoinColumn('page_id', 'id', true, false, 'SET NULL')
@@ -311,5 +312,16 @@ class Submission
     public function setTrackingId($trackingId)
     {
         $this->trackingId = $trackingId;
+    }
+
+    /**
+     * This method is used by standard entity algorithms to check if the current
+     * user has permission to view/edit/delete this item. Provide the form creator for it.
+     *
+     * @return mixed
+     */
+    public function getCreatedBy()
+    {
+        return $this->getForm()->getCreatedBy();
     }
 }

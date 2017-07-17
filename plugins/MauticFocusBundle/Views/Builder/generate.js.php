@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2016 Mautic, Inc. All rights reserved
  * @author      Mautic, Inc
  *
@@ -11,10 +12,14 @@ $style          = $focus['style'];
 $props          = $focus['properties'];
 $useScrollEvent = in_array($props['when'], ['scroll_slight', 'scroll_middle', 'scroll_bottom']);
 $useUnloadEvent = ($props['when'] == 'leave');
-$useTimeout     = (!$useUnloadEvent && !$useScrollEvent && $props['when'] != 'immediately');
-
+$useTimeout     = (int) $props['timeout'];
+if ($props['when'] == '5seconds') {
+    $useTimeout = 5;
+} elseif ($props['when'] == 'minute') {
+    $useTimeout = 60;
+}
 if ($useTimeout) {
-    $timeout = ($props['when'] == '5seconds') ? 5000 : 60000;
+    $timeout = $useTimeout * 1000;
 }
 
 $debug          = ($app->getEnvironment() == 'dev') ? 'true' : 'false';
@@ -28,22 +33,22 @@ if (!isset($preview)) {
 if (!isset($clickUrl)) {
     $clickUrl = $props['content']['link_url'];
 }
+    $cssContent = $view->render(
+        'MauticFocusBundle:Builder:style.less.php',
+        [
+            'preview' => $preview,
+            'focus'   => $focus,
+        ]
+    );
+    $cssContent = $view->escape($cssContent, 'js');
 
-$cssContent = $view->render(
-    'MauticFocusBundle:Builder:style.less.php',
-    [
-        'preview' => $preview,
-    ]
-);
-$cssContent = $view->escape($cssContent, 'js');
-
-$parentCssContent = $view->render(
-    'MauticFocusBundle:Builder:parent.less.php',
-    [
-        'preview' => $preview,
-    ]
-);
-$parentCssContent = $view->escape($parentCssContent, 'js');
+    $parentCssContent = $view->render(
+        'MauticFocusBundle:Builder:parent.less.php',
+        [
+            'preview' => $preview,
+        ]
+    );
+    $parentCssContent = $view->escape($parentCssContent, 'js');
 
 switch ($style) {
     case 'bar':
@@ -64,7 +69,6 @@ switch ($style) {
         break;
 }
 ?>
-
 (function (window) {
     if (typeof window.MauticFocusParentHeadStyleInserted == 'undefined') {
         window.MauticFocusParentHeadStyleInserted = false;
@@ -100,6 +104,16 @@ switch ($style) {
                 <?php else: ?>
                 var closer = Focus.iframeDoc.getElementsByClassName('mf-<?php echo $style; ?>-close');
                 var aTag = closer[0].getElementsByTagName('a');
+                var container = Focus.iframeDoc.getElementsByClassName('mf-<?php echo $style; ?>');
+
+                container.onclick = function(e) {
+                    if (e) { e.stopPropagation(); }
+                    else { window.event.cancelBubble = true; }
+                };
+                document.onclick = function() {
+                    aTag[0].click();
+                };
+
                 aTag[0].addEventListener('click', function (event) {
                     // Prevent multiple engagements for link clicks on exit intent
                     Focus.modalsDismissed["<?php echo $focus['id']; ?>"] = true;
@@ -196,21 +210,37 @@ switch ($style) {
                 if (Focus.debug)
                     console.log('scroll event registered');
 
-                window.addEventListener('scroll', Focus.engageVisitorAtScrollPosition);
+                    <?php if ($useTimeout): ?>
+                    if (Focus.debug)
+                        console.log('timeout event registered');
 
-                <?php elseif ($useTimeout): ?>
-                if (Focus.debug)
-                    console.log('timeout event registered');
+                    setTimeout(function () {
+                        window.addEventListener('scroll', Focus.engageVisitorAtScrollPosition);
+                    }, <?php echo $timeout; ?>);
 
-                setTimeout(function () {
-                    Focus.engageVisitor();
-                }, <?php echo $timeout; ?>);
+                    <?php else: ?>
+
+                     window.addEventListener('scroll', Focus.engageVisitorAtScrollPosition);
+
+                   <?php endif; ?>
+
                 <?php elseif ($useUnloadEvent): ?>
                 if (Focus.debug)
                     console.log('show when visitor leaves');
 
-                // Use mouseleave event on <html> or else the div will not show
-                document.documentElement.addEventListener('mouseleave', Focus.engageVisitor);
+                    <?php if ($useTimeout): ?>
+                    if (Focus.debug)
+                        console.log('timeout event registered');
+
+                    setTimeout(function () {
+                        document.documentElement.addEventListener('mouseleave', Focus.engageVisitor);
+                    }, <?php echo $timeout; ?>);
+
+                    <?php else: ?>
+
+                    document.documentElement.addEventListener('mouseleave', Focus.engageVisitor);
+
+                    <?php endif; ?>
 
                 // Add a listener to every link
                 <?php if ($linkActivation): ?>
@@ -235,8 +265,22 @@ switch ($style) {
                 if (Focus.debug)
                     console.log('show immediately');
 
-                // Give a slight delay to allow browser to process style injection into header
-                Focus.engageVisitor();
+                    <?php if ($useTimeout): ?>
+                    if (Focus.debug)
+                        console.log('timeout event registered');
+
+                    setTimeout(function () {
+                        // Give a slight delay to allow browser to process style injection into header
+                        Focus.engageVisitor();
+                    }, <?php echo $timeout; ?>);
+
+                    <?php else: ?>
+
+                    // Give a slight delay to allow browser to process style injection into header
+                    Focus.engageVisitor();
+
+                    <?php endif; ?>
+
                 <?php endif; ?>
             },
 

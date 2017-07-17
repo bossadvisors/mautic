@@ -1,5 +1,6 @@
 <?php
-/**
+
+/*
  * @copyright   2015 Mautic Contributors. All rights reserved
  * @author      Mautic
  *
@@ -51,7 +52,7 @@ class UntrackableUrlsEvent extends Event
      */
     public function addNonTrackable($url)
     {
-        $this->doNotTrack[$url] = true;
+        $this->doNotTrack[] = $url;
     }
 
     /**
